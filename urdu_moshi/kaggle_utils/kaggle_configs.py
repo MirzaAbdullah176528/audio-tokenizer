@@ -13,6 +13,7 @@ from configs.train_configs.stage2_3_4 import (
 )
 
 
+
 @dataclass
 class KaggleStage1Config(Stage1TrainConfig):
     data_path: str = "/kaggle/input/urdu-speech-corpus/audio"
