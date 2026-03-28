@@ -40,9 +40,9 @@ print("Dependencies installed.")
 
 # ── CELL 2: TPU setup ────────────────────────────────────────────
 import sys
-sys.path.insert(0, "/kaggle/input/urdu-moshi-code/urdu_moshi")
 
-from kaggle.tpu_setup import setup_kaggle_tpu, get_kaggle_paths, print_kaggle_quota_reminder
+sys.path.insert(0, "/kaggle/input/urdu-moshi-code/urdu_moshi")
+from kaggle_utils.tpu_setup import setup_kaggle_tpu, get_kaggle_paths, print_kaggle_quota_reminder
 
 print_kaggle_quota_reminder()
 num_devices = setup_kaggle_tpu()
@@ -56,7 +56,7 @@ for k, v in paths.items():
 
 
 # ── CELL 4: Config ───────────────────────────────────────────────
-from kaggle.kaggle_configs import KaggleStage1Config
+from kaggle_utils.kaggle_configs import KaggleStage1Config
 from configs.model_config import MoshiConfig
 
 train_cfg = KaggleStage1Config(
@@ -116,7 +116,7 @@ print("Mimi codec ready.")
 
 
 # ── CELL 8: Resume from previous session if available ────────────
-from kaggle.kaggle_checkpoint import KaggleCheckpointManager
+from kaggle_utils.kaggle_checkpoint import KaggleCheckpointManager
 
 PREVIOUS_SESSION_DATASET = "/kaggle/input/urdu-moshi-stage1"
 
@@ -194,7 +194,7 @@ trainer.train(data_iterator=dataset.iterate())
 
 
 # ── CELL 11: Save completion status ──────────────────────────────
-from kaggle.kaggle_checkpoint import KaggleCheckpointManager
+from kaggle_utils.kaggle_checkpoint import KaggleCheckpointManager
 KaggleCheckpointManager.print_commit_instructions(stage=1)
 
 print("""

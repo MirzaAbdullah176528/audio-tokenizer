@@ -219,8 +219,8 @@ class MoshiTrainer:
 
             batch = _shard_batch(batch, jax.device_count())
 
-            self.rng, step_rngs = jax.random.split(self.rng[0])
-            step_rngs = jax.random.split(step_rngs, jax.device_count())
+            step_rngs = jax.random.split(self.rng[0], jax.device_count())
+            self.rng = jax.random.split(self.rng[0], jax.device_count())
 
             self.state, metrics = self.train_step(self.state, batch, step_rngs)
 
