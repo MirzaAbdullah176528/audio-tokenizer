@@ -80,60 +80,64 @@ class Stage1Dataset:
         self.batch_size = batch_size
         self.rng = np.random.default_rng(42)
 
-    def _process_audio_file(self, file_path: str) -> Optional[Dict[str, np.ndarray]]:
+    def _process_audio_file(self, file_path: str) -> Optional[np.ndarray]:
+        """Returns raw audio array, or None if file is unreadable."""
         try:
             audio = load_and_resample_audio(file_path)
         except Exception:
             return None
-
-        min_samples = int(self.segment_frames / FRAME_RATE * SAMPLE_RATE)
-        if len(audio) < min_samples:
+        if len(audio) < 100:  # skip essentially empty files
             return None
-
-        audio_tokens = encode_audio_with_mimi(audio[:min_samples], self.mimi_encode_fn)
-        S, Q = audio_tokens.shape
-        S = min(S, self.segment_frames)
-        audio_tokens = audio_tokens[:S]
-
-        text_delay = self.rng.uniform(*self.text_delay_range)
-        transcript_result = self.whisper_transcribe_fn(file_path)
-
-        if transcript_result is not None:
-            words = transcript_result.get("words", [])
-            word_texts = [w["word"] for w in words]
-            word_starts = [w["start"] for w in words]
-            text_tokens = build_text_tokens_with_timing(
-                word_texts, word_starts, S, self.tokenizer, self.im_config, text_delay
-            )
-        else:
-            text_tokens = np.full(S, self.im_config.pad_token_id, dtype=np.int32)
-
-        if self.rng.random() < self.text_mask_prob:
-            text_tokens = np.full(S, self.im_config.pad_token_id, dtype=np.int32)
-
-        user_tokens = np.zeros_like(audio_tokens)
-
-        joint = self.ms_processor.build_joint_tokens_single_stream(
-            moshi_audio_tokens=audio_tokens,
-            text_tokens=text_tokens,
-            acoustic_delay=self.acoustic_delay,
-        )
-
-        return {"joint_tokens": joint}
+        return audio
 
     def iterate(self) -> Generator[Dict[str, np.ndarray], None, None]:
         audio_files = _find_audio_files(self.audio_dir)
         self.rng.shuffle(audio_files)
 
-        batch_tokens = []
+        min_samples = int(self.segment_frames / FRAME_RATE * SAMPLE_RATE)
+        audio_buffer = []
+        buffer_len = 0
+
         for file_path in audio_files:
-            sample = self._process_audio_file(file_path)
-            if sample is None:
+            audio = self._process_audio_file(file_path)
+            if audio is None:
                 continue
-            batch_tokens.append(sample["joint_tokens"])
-            if len(batch_tokens) == self.batch_size:
-                yield {"joint_tokens": np.stack(batch_tokens, axis=0)}
-                batch_tokens = []
+            audio_buffer.append(audio)
+            buffer_len += len(audio)
+
+            # once we have enough audio, carve out segments
+            while buffer_len >= min_samples:
+                combined = np.concatenate(audio_buffer)
+                segment = combined[:min_samples]
+                remainder = combined[min_samples:]
+
+                # re-seed buffer with leftover
+                audio_buffer = [remainder] if len(remainder) > 100 else []
+                buffer_len = len(remainder) if len(remainder) > 100 else 0
+
+                # encode segment
+                audio_tokens = encode_audio_with_mimi(segment, self.mimi_encode_fn)
+                S = min(audio_tokens.shape[0], self.segment_frames)
+                audio_tokens = audio_tokens[:S]
+
+                text_delay = self.rng.uniform(*self.text_delay_range)
+                if self.rng.random() < self.text_mask_prob:
+                    text_tokens = np.full(S, self.im_config.pad_token_id, dtype=np.int32)
+                else:
+                    text_tokens = np.full(S, self.im_config.pad_token_id, dtype=np.int32)
+
+                joint = self.ms_processor.build_joint_tokens_single_stream(
+                    moshi_audio_tokens=audio_tokens,
+                    text_tokens=text_tokens,
+                    acoustic_delay=self.acoustic_delay,
+                )
+
+                self._batch_buffer = getattr(self, '_batch_buffer', [])
+                self._batch_buffer.append(joint)
+
+                if len(self._batch_buffer) == self.batch_size:
+                    yield {"joint_tokens": np.stack(self._batch_buffer, axis=0)}
+                    self._batch_buffer = []
 
 
 class Stage2Dataset:

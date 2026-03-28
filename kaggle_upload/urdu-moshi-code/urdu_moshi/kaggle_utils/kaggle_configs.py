@@ -13,6 +13,7 @@ from configs.train_configs.stage2_3_4 import (
 )
 
 
+
 @dataclass
 class KaggleStage1Config(Stage1TrainConfig):
     data_path: str = "/kaggle/input/urdu-speech-corpus/audio"
@@ -25,7 +26,7 @@ class KaggleStage1Config(Stage1TrainConfig):
     eval_every_steps: int = 2_000
 
     batch_audio_hours: float = 4.0
-    sequence_duration_seconds: float = 120.0
+    sequence_duration_seconds: float = 30.0
 
     num_tpu_devices: int = 8
     gradient_checkpointing: bool = True

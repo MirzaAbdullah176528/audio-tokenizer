@@ -1,3 +1,29 @@
+# ── CELL 0: Download Urdu audio from HuggingFace ─────────────────
+import os
+import subprocess
+
+HF_TOKEN = "YOUR_HF_TOKEN_HERE"  # paste your HuggingFace read token
+AUDIO_DIR = "/kaggle/working/audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+subprocess.run(["pip", "install", "-q", "huggingface_hub"], check=True)
+
+from huggingface_hub import snapshot_download
+
+print("Downloading batch_00001 from HuggingFace...")
+snapshot_download(
+    repo_id="mirza176528470100/audio_dataset",
+    repo_type="dataset",
+    local_dir=AUDIO_DIR,
+    token=HF_TOKEN,
+    allow_patterns=["batch_00001/**"],
+    ignore_patterns=["*.json", "*.md"],
+)
+print(f"Download complete. Audio saved to {AUDIO_DIR}")
+
+
+# ================================================================
+
 # ================================================================
 # URDU MOSHI — STAGE 1 TRAINING NOTEBOOK
 # TPU v5e-8 on Kaggle
@@ -49,7 +75,8 @@ num_devices = setup_kaggle_tpu()
 
 
 # ── CELL 3: Paths ────────────────────────────────────────────────
-paths = get_kaggle_paths(base_dataset_name="urdu-speech-corpus")
+paths = get_kaggle_paths(base_dataset_name=None)
+paths["audio_dir"] = "/kaggle/working/audio"
 print("Paths:")
 for k, v in paths.items():
     print(f"  {k}: {v}")
