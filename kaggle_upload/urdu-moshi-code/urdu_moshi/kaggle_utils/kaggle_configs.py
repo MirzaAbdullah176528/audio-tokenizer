@@ -25,7 +25,7 @@ class KaggleStage1Config(Stage1TrainConfig):
     eval_every_steps: int = 2_000
 
     batch_audio_hours: float = 4.0
-    sequence_duration_seconds: float = 30.0
+    sequence_duration_seconds: float = 120.0
 
     num_tpu_devices: int = 8
     gradient_checkpointing: bool = True
