@@ -80,7 +80,7 @@ print("Dependencies installed.")
 # ── CELL 2: TPU setup ────────────────────────────────────────────
 import sys
 
-sys.path.insert(0, "/kaggle/input/urdu-moshi-code/urdu_moshi")
+sys.path.insert(0, "/kaggle/input/urdu-moshi-code-v2/urdu_moshi")
 from kaggle_utils.tpu_setup import setup_kaggle_tpu, get_kaggle_paths, print_kaggle_quota_reminder
 
 print_kaggle_quota_reminder()
