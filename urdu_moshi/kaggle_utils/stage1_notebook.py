@@ -1,3 +1,46 @@
+# ── CELL 0: Download all assets from HuggingFace ─────────────────
+import os
+import subprocess
+
+HF_TOKEN = "YOUR_HF_TOKEN_HERE"  # paste your HuggingFace read token here
+subprocess.run(["pip", "install", "-q", "huggingface_hub"], check=True)
+from huggingface_hub import snapshot_download
+
+# 1. Urdu audio (batch_00001 only — enough for full Stage 1 session)
+AUDIO_DIR = "/kaggle/working/audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+print("Downloading Urdu audio batch_00001...")
+snapshot_download(
+    repo_id="mirza176528470100/audio_dataset",
+    repo_type="dataset",
+    local_dir=AUDIO_DIR,
+    token=HF_TOKEN,
+    allow_patterns=["batch_00001/**"],
+    ignore_patterns=["*.json", "*.md"],
+)
+print("Audio ready.")
+
+# 2. Mimi pretrained weights
+print("Downloading Mimi weights...")
+snapshot_download(
+    repo_id="kyutai/moshika-pytorch-bf16",
+    repo_type="model",
+    local_dir="/kaggle/working/mimi_weights",
+    ignore_patterns=["*.md", "*.txt"],
+)
+print("Mimi weights ready.")
+
+# 3. Qwen2.5-1.5B weights
+print("Downloading Qwen2.5-1.5B weights...")
+snapshot_download(
+    repo_id="Qwen/Qwen2.5-1.5B",
+    repo_type="model",
+    local_dir="/kaggle/working/qwen25_weights",
+    ignore_patterns=["*.md", "*.txt"],
+)
+print("Qwen2.5 weights ready.")
+
+
 # ================================================================
 # URDU MOSHI — STAGE 1 TRAINING NOTEBOOK
 # TPU v5e-8 on Kaggle
@@ -5,13 +48,9 @@
 # HOW TO USE:
 #   1. Create a Kaggle Notebook
 #   2. Accelerator → TPU VM v5e-8
-#   3. Add your Urdu audio dataset as input
+#   3. Add urdu-moshi-code as input dataset
 #   4. Paste this entire file or upload as .ipynb
 #   5. Run all cells
-#
-# BEFORE RUNNING: Upload your project code as a Kaggle Dataset
-#   kaggle datasets create -p /path/to/urdu_moshi --dir-mode zip
-#   Then add that dataset as input: /kaggle/input/urdu-moshi-code/
 # ================================================================
 
 
@@ -49,7 +88,10 @@ num_devices = setup_kaggle_tpu()
 
 
 # ── CELL 3: Paths ────────────────────────────────────────────────
-paths = get_kaggle_paths(base_dataset_name="urdu-speech-corpus")
+paths = get_kaggle_paths(base_dataset_name=None)
+paths["audio_dir"] = "/kaggle/working/audio"
+paths["pretrained_mimi"] = "/kaggle/working/mimi_weights"
+paths["qwen_weights"] = "/kaggle/working/qwen25_weights"
 print("Paths:")
 for k, v in paths.items():
     print(f"  {k}: {v}")
@@ -76,14 +118,14 @@ tokenizer = UrduTokenizer(TOKENIZER_PATH)
 print(f"Tokenizer loaded. Vocab size: {tokenizer.vocab_size}")
 
 
-# ── CELL 6: Load/download backbone weights ───────────────────────
+# ── CELL 6: Load backbone weights ────────────────────────────────
 from model.backbone import load_qwen25_pretrained_weights
 from configs.model_config import Qwen25BackboneConfig
 
 backbone_cfg = Qwen25BackboneConfig()
 backbone_pretrained = load_qwen25_pretrained_weights(
     config=backbone_cfg,
-    cache_dir=paths["output_dir"],
+    cache_dir=paths["qwen_weights"],
 )
 print("Backbone weights loaded.")
 
@@ -97,7 +139,7 @@ import jax.numpy as jnp
 mimi_cfg = MimiConfig()
 mimi_model, mimi_pretrained = create_mimi_for_finetuning(
     config=mimi_cfg,
-    pretrained_checkpoint=paths.get("pretrained_mimi", None),
+    pretrained_checkpoint=paths["pretrained_mimi"],
     freeze_encoder=False,
     freeze_decoder=False,
 )
