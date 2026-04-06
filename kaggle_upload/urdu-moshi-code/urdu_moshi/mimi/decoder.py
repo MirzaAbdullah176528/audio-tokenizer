@@ -6,6 +6,7 @@ import flax.linen as nn
 from configs.model_config import MimiDecoderConfig
 from mimi.encoder import BottleneckTransformer, ResidualBlock
 
+
 class CausalTransposedConv1d(nn.Module):
     features: int
     kernel_size: int
