@@ -53,15 +53,54 @@ def create_train_state(
     stage: int = 1,
 ) -> TrainState:
     rng = jax.random.PRNGKey(42)
-    jax.clear_caches()
-    dummy_tokens = jnp.zeros((1, 1, 17), dtype=jnp.int32)
-    variables = model.init(rng, dummy_tokens)
-    del dummy_tokens
-    jax.effects_barrier()   
 
-    params = variables["params"]
-    if pretrained_params is not None:
-        params = _merge_pretrained_params(params, pretrained_params)
+    depth_only_model = model.depth_transformer
+    dummy_ctx = jnp.zeros((1, model.config.backbone.hidden_size), dtype=jnp.bfloat16)
+    dummy_prev = jnp.zeros((1, model.config.depth.num_codebook_streams), dtype=jnp.int32)
+    depth_vars = depth_only_model.init(rng, dummy_ctx, dummy_prev)
+    depth_init_params = depth_vars["params"]
+
+    misc_rng = jax.random.PRNGKey(1)
+    embed_params = {
+        "moshi_stream_embeds_" + str(i): {
+            "embedding": jax.random.normal(
+                jax.random.fold_in(misc_rng, i),
+                (model.config.audio_vocab_size + 1, model.config.backbone.hidden_size),
+                dtype=jnp.bfloat16,
+            ) * 0.02
+        }
+        for i in range(model.config.multistream.num_codebooks)
+    }
+    embed_params.update({
+        "user_stream_embeds_" + str(i): {
+            "embedding": jax.random.normal(
+                jax.random.fold_in(misc_rng, i + 100),
+                (model.config.audio_vocab_size + 1, model.config.backbone.hidden_size),
+                dtype=jnp.bfloat16,
+            ) * 0.02
+        }
+        for i in range(model.config.multistream.num_codebooks)
+    })
+    embed_params["text_embed"] = {
+        "embedding": jax.random.normal(
+            jax.random.fold_in(misc_rng, 200),
+            (model.config.inner_monologue.text_vocab_size + 4, model.config.backbone.hidden_size),
+            dtype=jnp.bfloat16,
+        ) * 0.02
+    }
+    embed_params["backbone_to_depth"] = {
+        "kernel": jax.random.normal(
+            jax.random.fold_in(misc_rng, 300),
+            (model.config.backbone.hidden_size, model.config.depth.model_dim),
+            dtype=jnp.bfloat16,
+        ) * 0.02
+    }
+
+    params = {
+        "backbone": pretrained_params["backbone"] if pretrained_params else {},
+        "depth_transformer": depth_init_params,
+        **embed_params,
+    }
 
     temporal_params, depth_params = partition_params(params)
 
