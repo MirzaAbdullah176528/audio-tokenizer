@@ -53,8 +53,11 @@ def create_train_state(
     stage: int = 1,
 ) -> TrainState:
     rng = jax.random.PRNGKey(42)
-    dummy_tokens = jnp.zeros((1, 8, 17), dtype=jnp.int32)
+    jax.clear_caches()
+    dummy_tokens = jnp.zeros((1, 1, 17), dtype=jnp.int32)
     variables = model.init(rng, dummy_tokens)
+    del dummy_tokens
+    jax.effects_barrier()   
 
     params = variables["params"]
     if pretrained_params is not None:
