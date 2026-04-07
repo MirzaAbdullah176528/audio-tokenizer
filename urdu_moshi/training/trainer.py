@@ -52,74 +52,25 @@ def create_train_state(
     pretrained_params: Optional[Dict] = None,
     stage: int = 1,
 ) -> TrainState:
+    from model.depth_transformer import DepthTransformer
+    from configs.model_config import DepthTransformerConfig
+
     rng = jax.random.PRNGKey(42)
 
-    depth_only_model = model.depth_transformer
-    dummy_ctx = jnp.zeros((1, model.config.backbone.hidden_size), dtype=jnp.bfloat16)
-    dummy_prev = jnp.zeros((1, model.config.depth.num_codebook_streams), dtype=jnp.int32)
-    depth_vars = depth_only_model.init(rng, dummy_ctx, dummy_prev)
-    depth_init_params = depth_vars["params"]
+    depth_cfg = model.config.depth
+    backbone_hidden = model.config.backbone.hidden_size
 
-    misc_rng = jax.random.PRNGKey(1)
-    embed_params = {
-        "moshi_stream_embeds_" + str(i): {
-            "embedding": jax.random.normal(
-                jax.random.fold_in(misc_rng, i),
-                (model.config.audio_vocab_size + 1, model.config.backbone.hidden_size),
-                dtype=jnp.bfloat16,
-            ) * 0.02
-        }
-        for i in range(model.config.multistream.num_codebooks)
-    }
-    embed_params.update({
-        "user_stream_embeds_" + str(i): {
-            "embedding": jax.random.normal(
-                jax.random.fold_in(misc_rng, i + 100),
-                (model.config.audio_vocab_size + 1, model.config.backbone.hidden_size),
-                dtype=jnp.bfloat16,
-            ) * 0.02
-        }
-        for i in range(model.config.multistream.num_codebooks)
-    })
-    embed_params["text_embed"] = {
-        "embedding": jax.random.normal(
-            jax.random.fold_in(misc_rng, 200),
-            (model.config.inner_monologue.text_vocab_size + 4, model.config.backbone.hidden_size),
-            dtype=jnp.bfloat16,
-        ) * 0.02
-    }
-    embed_params["backbone_to_depth"] = {
-        "kernel": jax.random.normal(
-            jax.random.fold_in(misc_rng, 300),
-            (model.config.backbone.hidden_size, model.config.depth.model_dim),
-            dtype=jnp.bfloat16,
-        ) * 0.02
-    }
-
-    params = {
-        "backbone": pretrained_params["backbone"] if pretrained_params else {},
-        "depth_transformer": depth_init_params,
-        **embed_params,
-    }
-
-    temporal_params, depth_params = partition_params(params)
-
-    if stage == 1:
-        temporal_opt, depth_opt = build_stage1_optimizers(config)
-    else:
-        temporal_opt, depth_opt = build_finetuning_optimizers(config)
-
-    temporal_opt_state = temporal_opt.init(temporal_params)
-    depth_opt_state = depth_opt.init(depth_params)
-
-    return TrainState(
-        step=0,
-        temporal_params=temporal_params,
-        depth_params=depth_params,
-        temporal_opt_state=temporal_opt_state,
-        depth_opt_state=depth_opt_state,
-        ema_params=params,
+    depth_standalone = DepthTransformer(
+        config=depth_cfg,
+        backbone_dim=backbone_hidden,
+        dtype=jnp.bfloat16,
     )
+    dummy_ctx = jnp.zeros((1, backbone_hidden), dtype=jnp.bfloat16)
+    dummy_prev = jnp.zeros((1, depth_cfg.num_codebook_streams), dtype=jnp.int32)
+    depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
+    depth_init_params = depth_vars["params"]
+    del dummy_ctx, dummy_prev, depth_vars
+    jax.clear_caches()
 
 
 def _merge_pretrained_params(init_params: Dict, pretrained: Dict) -> Dict:
