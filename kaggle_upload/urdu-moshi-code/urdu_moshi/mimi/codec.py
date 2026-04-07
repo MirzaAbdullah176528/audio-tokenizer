@@ -75,7 +75,6 @@ class Mimi(nn.Module):
         return result
 
 
-
 def load_mimi_pretrained_weights(
     mimi_model: Mimi,
     init_params: Dict,
@@ -91,8 +90,7 @@ def load_mimi_pretrained_weights(
     import glob, os
     if os.path.isdir(pytorch_checkpoint_path):
         candidates = glob.glob(os.path.join(pytorch_checkpoint_path, "*.pt")) + \
-            glob.glob(os.path.join(pytorch_checkpoint_path, "*.bin")) + \
-            glob.glob(os.path.join(pytorch_checkpoint_path, "*.safetensors"))
+                    glob.glob(os.path.join(pytorch_checkpoint_path, "*.bin"))
         if not candidates:
             raise FileNotFoundError(f"No .pt or .bin file found in {pytorch_checkpoint_path}")
         pytorch_checkpoint_path = candidates[0]

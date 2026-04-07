@@ -109,8 +109,8 @@ class Qwen25GQAttention(nn.Module):
         v = self.v_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim)
 
         cos, sin = self.rope(T)
-        cos = cos[None, :, None, :]
-        sin = sin[None, :, None, :]
+        cos = jnp.concatenate([cos, cos], axis=-1)[None, :, None, :]
+        sin = jnp.concatenate([sin, sin], axis=-1)[None, :, None, :]
 
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
