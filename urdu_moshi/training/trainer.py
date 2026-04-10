@@ -49,14 +49,14 @@ def compute_ema(ema_params: Dict, new_params: Dict, decay: float = 0.9999) -> Di
 def create_train_state(
     model: RQTransformer,
     config,
+    temporal_optimizer: optax.GradientTransformation,
+    depth_optimizer: optax.GradientTransformation,
     pretrained_params: Optional[Dict] = None,
     stage: int = 1,
 ) -> TrainState:
     from model.depth_transformer import DepthTransformer
-    from configs.model_config import DepthTransformerConfig
 
     rng = jax.random.PRNGKey(42)
-
     depth_cfg = model.config.depth
     backbone_hidden = model.config.backbone.hidden_size
 
@@ -71,6 +71,34 @@ def create_train_state(
     depth_init_params = depth_vars["params"]
     del dummy_ctx, dummy_prev, depth_vars
     jax.clear_caches()
+
+    if pretrained_params is not None:
+        backbone_params = pretrained_params.get("backbone", pretrained_params)
+        if "params" in backbone_params:
+            backbone_params = backbone_params["params"]
+    else:
+        from model.backbone import Qwen25FlaxBackbone
+        backbone_model = Qwen25FlaxBackbone(config=model.config.backbone, dtype=jnp.bfloat16)
+        dummy_emb = jnp.zeros((1, 4, model.config.backbone.hidden_size), dtype=jnp.bfloat16)
+        backbone_vars = backbone_model.init(rng, dummy_emb)
+        backbone_params = backbone_vars["params"]
+        del dummy_emb, backbone_vars
+        jax.clear_caches()
+
+    temporal_opt_state = temporal_optimizer.init(backbone_params)
+    depth_opt_state = depth_optimizer.init(depth_init_params)
+
+    all_params = merge_params(backbone_params, depth_init_params)
+    ema_params = jax.tree_util.tree_map(lambda x: x, all_params)
+
+    return TrainState(
+        step=0,
+        temporal_params=backbone_params,
+        depth_params=depth_init_params,
+        temporal_opt_state=temporal_opt_state,
+        depth_opt_state=depth_opt_state,
+        ema_params=ema_params,
+    )
 
 
 def _merge_pretrained_params(init_params: Dict, pretrained: Dict) -> Dict:
@@ -191,7 +219,14 @@ class MoshiTrainer:
             model, temporal_opt, depth_opt, config, is_multi_stream
         )
 
-        state = create_train_state(model, config, pretrained_params, stage)
+        state = create_train_state(
+            model=model,
+            config=config,
+            temporal_optimizer=temporal_opt,
+            depth_optimizer=depth_opt,
+            pretrained_params=pretrained_params,
+            stage=stage,
+        )
         self.state = jax.device_put_replicated(state, jax.devices())
 
         num_devices = jax.device_count()
