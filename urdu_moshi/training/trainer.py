@@ -67,8 +67,11 @@ def create_train_state(
     )
     dummy_ctx = jnp.zeros((1, backbone_hidden), dtype=jnp.bfloat16)
     dummy_prev = jnp.zeros((1, depth_cfg.num_codebook_streams), dtype=jnp.int32)
-    depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
-    depth_init_params = depth_vars["params"]
+    with jax.default_device(jax.devices("cpu")[0]):
+        depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
+        depth_init_params = jax.tree_util.tree_map(
+            lambda x: jnp.array(x, dtype=jnp.bfloat16), depth_vars["params"]
+        )
     del dummy_ctx, dummy_prev, depth_vars
     jax.clear_caches()
 
@@ -84,7 +87,9 @@ def create_train_state(
         backbone_params = backbone_vars["params"]
         del dummy_emb, backbone_vars
         jax.clear_caches()
-
+    # Free backbone params from GPU before initializing optimizer states
+    backbone_params = jax.tree_util.tree_map(lambda x: jnp.array(x), backbone_params)
+    jax.clear_caches()
     temporal_opt_state = temporal_optimizer.init(backbone_params)
     depth_opt_state = depth_optimizer.init(depth_init_params)
 
