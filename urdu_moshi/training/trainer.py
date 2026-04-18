@@ -56,54 +56,56 @@ def create_train_state(
 ) -> TrainState:
     from model.depth_transformer import DepthTransformer
 
+    cpu = jax.devices("cpu")[0]
     rng = jax.random.PRNGKey(42)
     depth_cfg = model.config.depth
     backbone_hidden = model.config.backbone.hidden_size
 
-    depth_standalone = DepthTransformer(
-        config=depth_cfg,
-        backbone_dim=backbone_hidden,
-        dtype=jnp.bfloat16,
-    )
-    dummy_ctx = jnp.zeros((1, backbone_hidden), dtype=jnp.bfloat16)
-    dummy_prev = jnp.zeros((1, depth_cfg.num_codebook_streams), dtype=jnp.int32)
-    with jax.default_device(jax.devices("cpu")[0]):
-        depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
-        depth_init_params = jax.tree_util.tree_map(
-            lambda x: jnp.array(x, dtype=jnp.bfloat16), depth_vars["params"]
+    # Init everything on CPU to avoid OOM
+    with jax.default_device(cpu):
+        depth_standalone = DepthTransformer(
+            config=depth_cfg,
+            backbone_dim=backbone_hidden,
+            dtype=jnp.bfloat16,
         )
-    del dummy_ctx, dummy_prev, depth_vars
-    jax.clear_caches()
+        dummy_ctx = jnp.zeros((1, backbone_hidden), dtype=jnp.bfloat16)
+        dummy_prev = jnp.zeros((1, depth_cfg.num_codebook_streams), dtype=jnp.int32)
+        depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
+        depth_init_params = depth_vars["params"]
+        del dummy_ctx, dummy_prev, depth_vars
 
-    if pretrained_params is not None:
-        backbone_params = pretrained_params.get("backbone", pretrained_params)
-        if "params" in backbone_params:
-            backbone_params = backbone_params["params"]
-    else:
-        from model.backbone import Qwen25FlaxBackbone
-        backbone_model = Qwen25FlaxBackbone(config=model.config.backbone, dtype=jnp.bfloat16)
-        dummy_emb = jnp.zeros((1, 4, model.config.backbone.hidden_size), dtype=jnp.bfloat16)
-        backbone_vars = backbone_model.init(rng, dummy_emb)
-        backbone_params = backbone_vars["params"]
-        del dummy_emb, backbone_vars
-        jax.clear_caches()
-    # Free backbone params from GPU before initializing optimizer states
-    backbone_params = jax.tree_util.tree_map(lambda x: jnp.array(x), backbone_params)
-    jax.clear_caches()
-    temporal_opt_state = temporal_optimizer.init(backbone_params)
-    depth_opt_state = depth_optimizer.init(depth_init_params)
+        if pretrained_params is not None:
+            backbone_params = pretrained_params.get("backbone", pretrained_params)
+            if "params" in backbone_params:
+                backbone_params = backbone_params["params"]
+        else:
+            from model.backbone import Qwen25FlaxBackbone
+            backbone_model = Qwen25FlaxBackbone(config=model.config.backbone, dtype=jnp.bfloat16)
+            dummy_emb = jnp.zeros((1, 4, backbone_hidden), dtype=jnp.bfloat16)
+            backbone_vars = backbone_model.init(rng, dummy_emb)
+            backbone_params = backbone_vars["params"]
+            del dummy_emb, backbone_vars
 
-    all_params = merge_params(backbone_params, depth_init_params)
-    ema_params = jax.tree_util.tree_map(lambda x: x, all_params)
+        # Move backbone params to CPU if they're on TPU
+        backbone_params = jax.device_put(backbone_params, cpu)
+        depth_init_params = jax.device_put(depth_init_params, cpu)
 
-    return TrainState(
-        step=0,
-        temporal_params=backbone_params,
-        depth_params=depth_init_params,
-        temporal_opt_state=temporal_opt_state,
-        depth_opt_state=depth_opt_state,
-        ema_params=ema_params,
-    )
+        temporal_opt_state = temporal_optimizer.init(backbone_params)
+        depth_opt_state = depth_optimizer.init(depth_init_params)
+
+        all_params = merge_params(backbone_params, depth_init_params)
+        ema_params = jax.tree_util.tree_map(lambda x: x, all_params)
+
+        state = TrainState(
+            step=0,
+            temporal_params=backbone_params,
+            depth_params=depth_init_params,
+            temporal_opt_state=temporal_opt_state,
+            depth_opt_state=depth_opt_state,
+            ema_params=ema_params,
+        )
+
+    return state
 
 
 def _merge_pretrained_params(init_params: Dict, pretrained: Dict) -> Dict:
