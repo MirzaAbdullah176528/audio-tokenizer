@@ -83,12 +83,12 @@ class DepthTransformerConfig:
 
 @dataclass
 class Qwen25BackboneConfig:
-    hf_model_id: str = "Qwen/Qwen2.5-1.5B"
-    hidden_size: int = 1536
-    num_hidden_layers: int = 28
-    num_attention_heads: int = 12
+    hf_model_id: str ="Qwen/Qwen2.5-0.5B"
+    hidden_size: int = 896
+    num_hidden_layers: int = 24
+    num_attention_heads: int = 14
     num_key_value_heads: int = 2
-    intermediate_size: int = 8960
+    intermediate_size: int = 4864
     max_position_embeddings: int = 131072
     rope_theta: float = 1_000_000.0
     rms_norm_eps: float = 1e-6
