@@ -9,6 +9,7 @@ import optax
 import flax
 from flax.training import train_state
 from flax import struct
+import numpy as np
 
 from configs.model_config import MoshiConfig, RQTransformerConfig
 from model.rq_transformer import RQTransformer
@@ -236,13 +237,15 @@ class MoshiTrainer:
         )
         devices = jax.devices()
         cpu = jax.devices("cpu")[0]
+        mesh = jax.sharding.Mesh(devices, axis_names=('batch',))
+        replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
         def replicate_leaf(x):
             x_cpu = jax.device_put(x, cpu)
             shards = [jax.device_put(x_cpu, d) for d in devices]
             return jax.make_array_from_single_device_arrays(
                 (len(devices),) + x_cpu.shape,
-                jax.sharding.GSPMDSharding.get_replicated(devices),
+                replicated,
                 shards,
             )
 
