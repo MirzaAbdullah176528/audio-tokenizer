@@ -238,19 +238,18 @@ class MoshiTrainer:
         )
         devices = jax.devices()
         cpu = jax.devices("cpu")[0]
-        mesh = jax.sharding.Mesh(devices, axis_names=('batch',))
-        replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
         def replicate_leaf(x):
             x_cpu = jax.device_put(x, cpu)
-            shards = [jax.device_put(x_cpu, d) for d in devices]
-            return jax.make_array_from_single_device_arrays(
-                (len(devices),) + x_cpu.shape,
-                replicated,
-                shards,
-            )
+            return jax.device_put_replicated(x_cpu, devices)
 
-        self.state = jax.tree_util.tree_map(replicate_leaf, state)
+        import gc as _gc
+        leaves, treedef = jax.tree_util.tree_flatten(state)
+        replicated_leaves = []
+        for leaf in leaves:
+            replicated_leaves.append(replicate_leaf(leaf))
+            _gc.collect()
+        self.state = treedef.unflatten(replicated_leaves)
 
         num_devices = jax.device_count()
         self.rng = jax.random.split(jax.random.PRNGKey(0), num_devices)
