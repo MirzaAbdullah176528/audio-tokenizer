@@ -234,7 +234,19 @@ class MoshiTrainer:
             pretrained_params=pretrained_params,
             stage=stage,
         )
-        self.state = jax.device_put_replicated(state, jax.devices())
+        devices = jax.devices()
+        cpu = jax.devices("cpu")[0]
+
+        def replicate_leaf(x):
+            x_cpu = jax.device_put(x, cpu)
+            shards = [jax.device_put(x_cpu, d) for d in devices]
+            return jax.make_array_from_single_device_arrays(
+                (len(devices),) + x_cpu.shape,
+                jax.sharding.GSPMDSharding.get_replicated(devices),
+                shards,
+            )
+
+        self.state = jax.tree_util.tree_map(replicate_leaf, state)
 
         num_devices = jax.device_count()
         self.rng = jax.random.split(jax.random.PRNGKey(0), num_devices)
