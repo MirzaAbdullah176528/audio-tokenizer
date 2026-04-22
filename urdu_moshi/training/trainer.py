@@ -1,10 +1,12 @@
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 from functools import partial
 import time
+import gc
 
 import jax
 import jax.numpy as jnp
 from jax import pmap, lax
+from jax.sharding import PositionalSharding
 import optax
 import flax
 from flax.training import train_state
@@ -24,7 +26,6 @@ class TrainState(struct.PyTreeNode):
     depth_params: Any
     temporal_opt_state: Any
     depth_opt_state: Any
-    ema_params: Any
 
 
 def partition_params(params: Dict) -> Tuple[Dict, Dict]:
@@ -39,14 +40,6 @@ def merge_params(temporal_params: Dict, depth_params: Dict) -> Dict:
     return merged
 
 
-def compute_ema(ema_params: Dict, new_params: Dict, decay: float = 0.9999) -> Dict:
-    return jax.tree_util.tree_map(
-        lambda ema, new: decay * ema + (1 - decay) * new,
-        ema_params,
-        new_params,
-    )
-
-
 def create_train_state(
     model: RQTransformer,
     config,
@@ -54,7 +47,7 @@ def create_train_state(
     depth_optimizer: optax.GradientTransformation,
     pretrained_params: Optional[Dict] = None,
     stage: int = 1,
-) -> TrainState:
+) -> "TrainState":
     from model.depth_transformer import DepthTransformer
 
     cpu = jax.devices("cpu")[0]
@@ -62,7 +55,6 @@ def create_train_state(
     depth_cfg = model.config.depth
     backbone_hidden = model.config.backbone.hidden_size
 
-    # Init everything on CPU to avoid OOM
     with jax.default_device(cpu):
         depth_standalone = DepthTransformer(
             config=depth_cfg,
@@ -74,6 +66,7 @@ def create_train_state(
         depth_vars = depth_standalone.init(rng, dummy_ctx, dummy_prev)
         depth_init_params = depth_vars["params"]
         del dummy_ctx, dummy_prev, depth_vars
+        gc.collect()
 
         if pretrained_params is not None:
             backbone_params = pretrained_params.get("backbone", pretrained_params)
@@ -86,24 +79,20 @@ def create_train_state(
             backbone_vars = backbone_model.init(rng, dummy_emb)
             backbone_params = backbone_vars["params"]
             del dummy_emb, backbone_vars
+            gc.collect()
 
-        # Move backbone params to CPU if they're on TPU
         backbone_params = jax.device_put(backbone_params, cpu)
         depth_init_params = jax.device_put(depth_init_params, cpu)
 
         temporal_opt_state = jax.jit(
-            temporal_optimizer.init,
-            backend="cpu"
+            temporal_optimizer.init, backend="cpu"
         )(backbone_params)
-        depth_opt_state = jax.jit(
-            depth_optimizer.init,
-            backend="cpu"
-        )(depth_init_params)
+        gc.collect()
 
-        all_params = merge_params(backbone_params, depth_init_params)
-        ema_params = jax.tree_util.tree_map(
-            lambda x: jax.device_put(x, cpu), all_params
-        )
+        depth_opt_state = jax.jit(
+            depth_optimizer.init, backend="cpu"
+        )(depth_init_params)
+        gc.collect()
 
         state = TrainState(
             step=0,
@@ -111,18 +100,9 @@ def create_train_state(
             depth_params=depth_init_params,
             temporal_opt_state=temporal_opt_state,
             depth_opt_state=depth_opt_state,
-            ema_params=ema_params,
         )
 
     return state
-
-
-def _merge_pretrained_params(init_params: Dict, pretrained: Dict) -> Dict:
-    def _merge(init, pre):
-        if isinstance(init, dict) and isinstance(pre, dict):
-            return {k: _merge(init[k], pre[k]) if k in pre else init[k] for k in init}
-        return pre if pre is not None else init
-    return _merge(init_params, pretrained)
 
 
 def make_train_step(
@@ -131,7 +111,6 @@ def make_train_step(
     depth_optimizer: optax.GradientTransformation,
     config,
     is_multi_stream: bool = False,
-    
 ):
     def loss_fn(params, batch, rng):
         joint_tokens = batch["joint_tokens"]
@@ -160,36 +139,37 @@ def make_train_step(
         return total_loss, per_stream_losses
 
     @partial(jax.pmap, axis_name="batch", donate_argnums=(0,))
-    def train_step(state: TrainState, batch: Dict, rng: jax.random.PRNGKey) -> Tuple[TrainState, Dict]:
+    def train_step(
+        state: "TrainState",
+        batch: Dict,
+        rng: jax.random.PRNGKey,
+    ) -> Tuple["TrainState", Dict]:
         rng, dropout_rng = jax.random.split(rng)
 
         grad_fn = jax.value_and_grad(loss_fn, argnums=0, has_aux=True)
 
-        combined_params = {"temporal": state.temporal_params, "depth": state.depth_params}
+        combined_params = {
+            "temporal": state.temporal_params,
+            "depth": state.depth_params,
+        }
         (loss, per_stream_losses), grads = grad_fn(combined_params, batch, dropout_rng)
 
         grads = lax.pmean(grads, axis_name="batch")
         loss = lax.pmean(loss, axis_name="batch")
 
-        temporal_grads = grads["temporal"]
-        depth_grads = grads["depth"]
-
         temporal_updates, new_temporal_opt_state = temporal_optimizer.update(
-            temporal_grads,
+            grads["temporal"],
             state.temporal_opt_state,
             state.temporal_params,
         )
         new_temporal_params = optax.apply_updates(state.temporal_params, temporal_updates)
 
         depth_updates, new_depth_opt_state = depth_optimizer.update(
-            depth_grads,
+            grads["depth"],
             state.depth_opt_state,
             state.depth_params,
         )
         new_depth_params = optax.apply_updates(state.depth_params, depth_updates)
-
-        new_all_params = merge_params(new_temporal_params, new_depth_params)
-        new_ema_params = compute_ema(state.ema_params, new_all_params)
 
         new_state = TrainState(
             step=state.step + 1,
@@ -197,7 +177,6 @@ def make_train_step(
             depth_params=new_depth_params,
             temporal_opt_state=new_temporal_opt_state,
             depth_opt_state=new_depth_opt_state,
-            ema_params=new_ema_params,
         )
 
         metrics = {
@@ -208,6 +187,24 @@ def make_train_step(
         return new_state, metrics
 
     return train_step
+
+
+def _shard_state(state: "TrainState", devices) -> "TrainState":
+    sharding = PositionalSharding(devices).replicate()
+
+    def shard_leaf(x):
+        x_np = np.array(x)
+        return jax.device_put(x_np, sharding)
+
+    cpu = jax.devices("cpu")[0]
+    leaves, treedef = jax.tree_util.tree_flatten(state)
+    sharded_leaves = []
+    for leaf in leaves:
+        leaf_cpu = jax.device_put(leaf, cpu)
+        sharded_leaves.append(shard_leaf(leaf_cpu))
+        gc.collect()
+
+    return treedef.unflatten(sharded_leaves)
 
 
 class MoshiTrainer:
@@ -236,6 +233,7 @@ class MoshiTrainer:
             model, temporal_opt, depth_opt, config, is_multi_stream
         )
 
+        print("Building train state on CPU...")
         state = create_train_state(
             model=model,
             config=config,
@@ -244,20 +242,14 @@ class MoshiTrainer:
             pretrained_params=pretrained_params,
             stage=stage,
         )
+        gc.collect()
+
+        print("Sharding state across TPU devices...")
         devices = jax.devices()
-        cpu = jax.devices("cpu")[0]
-
-        def replicate_leaf(x):
-            x_cpu = jax.device_put(x, cpu)
-            return jax.device_put_replicated(x_cpu, devices)
-
-        import gc as _gc
-        leaves, treedef = jax.tree_util.tree_flatten(state)
-        replicated_leaves = []
-        for leaf in leaves:
-            replicated_leaves.append(replicate_leaf(leaf))
-            _gc.collect()
-        self.state = treedef.unflatten(replicated_leaves)
+        self.state = _shard_state(state, devices)
+        del state
+        gc.collect()
+        print(f"State sharded across {len(devices)} devices.")
 
         num_devices = jax.device_count()
         self.rng = jax.random.split(jax.random.PRNGKey(0), num_devices)
@@ -276,7 +268,6 @@ class MoshiTrainer:
                 break
 
             batch = _shard_batch(batch, jax.device_count())
-
             step_rngs = jax.random.split(self.rng[0], jax.device_count())
             self.rng = jax.random.split(self.rng[0], jax.device_count())
 

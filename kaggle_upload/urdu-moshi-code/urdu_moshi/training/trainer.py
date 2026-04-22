@@ -91,11 +91,19 @@ def create_train_state(
         backbone_params = jax.device_put(backbone_params, cpu)
         depth_init_params = jax.device_put(depth_init_params, cpu)
 
-        temporal_opt_state = temporal_optimizer.init(backbone_params)
-        depth_opt_state = depth_optimizer.init(depth_init_params)
+        temporal_opt_state = jax.jit(
+            temporal_optimizer.init,
+            backend="cpu"
+        )(backbone_params)
+        depth_opt_state = jax.jit(
+            depth_optimizer.init,
+            backend="cpu"
+        )(depth_init_params)
 
         all_params = merge_params(backbone_params, depth_init_params)
-        ema_params = jax.tree_util.tree_map(lambda x: x, all_params)
+        ema_params = jax.tree_util.tree_map(
+            lambda x: jax.device_put(x, cpu), all_params
+        )
 
         state = TrainState(
             step=0,
